@@ -190,7 +190,7 @@ type MemorySeriesStorageOptions struct {
 // has to be called to start the storage.
 func NewMemorySeriesStorage(o *MemorySeriesStorageOptions) Storage {
 	s := &memorySeriesStorage{
-		fpLocker: newFingerprintLocker(1024),
+		fpLocker: newFingerprintLocker(262144),
 
 		options: o,
 
