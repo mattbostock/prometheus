@@ -36,6 +36,9 @@ const (
 	scrapeHealthMetricName   = "up"
 	scrapeDurationMetricName = "scrape_duration_seconds"
 
+	appendBatchSize   = 128 // Max number of samples to send to scrapeLoop.append().
+	appendConcurrency = 16  // Max number of goroutines (per scrape) calling scrapeLoop.append().
+
 	// Constants for instrumentation.
 	namespace = "prometheus"
 	interval  = "interval"
@@ -419,7 +422,11 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 
 			samples, err := sl.scraper.scrape(scrapeCtx, start)
 			if err == nil {
-				sl.append(samples)
+				if len(samples) <= appendBatchSize {
+					sl.append(samples)
+				} else {
+					sl.concurrentAppend(samples)
+				}
 			} else if errc != nil {
 				errc <- err
 			}
@@ -441,6 +448,35 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 func (sl *scrapeLoop) stop() {
 	sl.cancel()
 	<-sl.done
+}
+
+func (sl *scrapeLoop) concurrentAppend(samples model.Samples) {
+	var (
+		wg          sync.WaitGroup
+		concurrency = len(samples)/appendBatchSize + 1
+		ch          = make(chan model.Samples)
+	)
+	if concurrency > appendConcurrency {
+		concurrency = appendConcurrency
+	}
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			wg.Add(1)
+			for s := range ch {
+				sl.append(s)
+			}
+			wg.Done()
+		}()
+	}
+	for i := 0; i < len(samples); i += appendBatchSize {
+		j := i + appendBatchSize
+		if j > len(samples) {
+			j = len(samples)
+		}
+		ch <- samples[i:j]
+	}
+	close(ch)
+	wg.Wait()
 }
 
 func (sl *scrapeLoop) append(samples model.Samples) {
